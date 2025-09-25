@@ -7,6 +7,8 @@ import { FoodScanCard } from "@/components/nutrition/FoodScanCard";
 import { ProfileModeSelector } from "@/components/nutrition/ProfileModeSelector";
 import { LanguageSelector } from "@/components/nutrition/LanguageSelector";
 import { NutritionResults } from "@/components/nutrition/NutritionResults";
+import { LiveFoodScanner } from "@/components/nutrition/LiveFoodScanner";
+import { supabase } from "@/integrations/supabase/client";
 import heroImage from "@/assets/hero-nutrition.jpg";
 
 const Index = () => {
@@ -15,30 +17,38 @@ const Index = () => {
   const [selectedLanguage, setSelectedLanguage] = useState("en");
   const [analysisData, setAnalysisData] = useState(null);
 
-  const handleFileSelect = (file: File) => {
-    // Mock analysis data for demonstration
-    const mockData = {
-      foodName: "Mixed Indian Thali",
-      calories: 450,
-      protein: 18,
-      vitamins: [
-        { name: "Vitamin A", amount: 25, unit: "% DV" },
-        { name: "Vitamin C", amount: 45, unit: "mg" },
-        { name: "Folate", amount: 120, unit: "mcg" }
-      ],
-      minerals: [
-        { name: "Iron", amount: 8, unit: "mg" },
-        { name: "Calcium", amount: 150, unit: "mg" },
-        { name: "Zinc", amount: 4, unit: "mg" }
-      ],
-      deficiencyRisk: [
-        { nutrient: "Iron", risk: "medium" as const },
-        { nutrient: "Vitamin B12", risk: "high" as const },
-        { nutrient: "Calcium", risk: "low" as const }
-      ]
-    };
-    
-    setAnalysisData(mockData);
+  const handleFileSelect = async (file: File) => {
+    try {
+      // Convert file to base64
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const imageData = e.target?.result as string;
+        
+        // Call AI analysis
+        const { data, error } = await supabase.functions.invoke('analyze-food', {
+          body: {
+            imageData,
+            profileMode: selectedProfile,
+            language: selectedLanguage
+          }
+        });
+
+        if (error) {
+          console.error('Analysis error:', error);
+          return;
+        }
+
+        setAnalysisData(data);
+        setCurrentStep("results");
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('File processing error:', error);
+    }
+  };
+
+  const handleLiveAnalysis = (data: any) => {
+    setAnalysisData(data);
     setCurrentStep("results");
   };
 
@@ -109,15 +119,23 @@ const Index = () => {
   if (currentStep === "scan") {
     return (
       <div className="min-h-screen bg-background py-12 px-4">
-        <div className="max-w-2xl mx-auto space-y-6">
+        <div className="max-w-4xl mx-auto space-y-6">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold mb-3">Scan Your Food</h1>
-            <p className="text-muted-foreground">Take a photo or upload an image for instant nutritional analysis</p>
+            <h1 className="text-3xl font-bold mb-3">Food Analysis Hub</h1>
+            <p className="text-muted-foreground">Upload an image or use live camera for instant nutritional analysis</p>
             <Badge variant="secondary" className="mt-2">
               Profile: {selectedProfile} | Language: {selectedLanguage}
             </Badge>
           </div>
-          <FoodScanCard onFileSelect={handleFileSelect} />
+          
+          <div className="grid gap-6 lg:grid-cols-2">
+            <FoodScanCard onFileSelect={handleFileSelect} />
+            <LiveFoodScanner 
+              profileMode={selectedProfile || "general"}
+              language={selectedLanguage}
+              onAnalysisResult={handleLiveAnalysis}
+            />
+          </div>
         </div>
       </div>
     );

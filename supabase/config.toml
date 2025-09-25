@@ -1,1 +1,11 @@
 project_id = "cuxhlisijusnfcbyejku"
+
+[auth]
+enabled = true
+enable_signup = true
+
+[functions.analyze-food]
+verify_jwt = false
+
+[functions.text-to-speech]
+verify_jwt = false
