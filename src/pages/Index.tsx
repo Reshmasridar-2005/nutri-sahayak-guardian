@@ -9,6 +9,7 @@ import { LanguageSelector } from "@/components/nutrition/LanguageSelector";
 import { NutritionResults } from "@/components/nutrition/NutritionResults";
 import { LiveFoodScanner } from "@/components/nutrition/LiveFoodScanner";
 import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/components/ui/use-toast";
 import heroImage from "@/assets/hero-nutrition.jpg";
 
 const Index = () => {
@@ -16,15 +17,92 @@ const Index = () => {
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState("en");
   const [analysisData, setAnalysisData] = useState(null);
+  const { toast } = useToast();
+
+  const generateNutritionSummary = (data: any, profile: string): string => {
+    const profileTips = {
+      children: "This food provides essential nutrients for healthy growth and development.",
+      pregnant: "Good nutritional choice supporting both maternal and fetal health.",
+      elderly: "Suitable for maintaining health and vitality in older adults.",
+      "weight-loss": "This fits well into a balanced weight management plan.",
+      anemia: "Contains nutrients that help prevent anemia and boost energy."
+    };
+
+    let summary = `I found ${data.foodName}. `;
+    summary += `Nutritional content: ${data.calories} calories, ${data.protein} grams of protein. `;
+    
+    if (data.vitamins && data.vitamins.length > 0) {
+      summary += `Key vitamins include: `;
+      const topVitamins = data.vitamins.slice(0, 3);
+      topVitamins.forEach((vit: any, index: number) => {
+        summary += `${vit.name} ${vit.amount}${vit.unit}`;
+        if (index < topVitamins.length - 1) summary += ", ";
+      });
+      summary += `. `;
+    }
+    
+    if (data.minerals && data.minerals.length > 0) {
+      summary += `Important minerals: `;
+      const topMinerals = data.minerals.slice(0, 3);
+      topMinerals.forEach((min: any, index: number) => {
+        summary += `${min.name} ${min.amount}${min.unit}`;
+        if (index < topMinerals.length - 1) summary += ", ";
+      });
+      summary += `. `;
+    }
+    
+    summary += profileTips[profile as keyof typeof profileTips] || profileTips.children;
+    summary += ` `;
+    
+    if (data.profileAdvice) {
+      summary += data.profileAdvice + ` `;
+    }
+    
+    if (data.deficiencyRisk?.length > 0) {
+      summary += `Health assessment: ${data.deficiencyRisk[0].nutrient} deficiency risk is ${data.deficiencyRisk[0].level}. `;
+      summary += `${data.deficiencyRisk[0].reason} `;
+      if (data.deficiencyRisk[0].recommendation) {
+        summary += `Recommendation: ${data.deficiencyRisk[0].recommendation}`;
+      }
+    } else {
+      summary += `This appears to be a nutritionally balanced choice for your profile.`;
+    }
+    
+    return summary;
+  };
+
+  const speakResult = async (text: string, lang: string) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('text-to-speech', {
+        body: {
+          text,
+          language: lang,
+          voice: 'alloy'
+        }
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const audio = new Audio(`data:audio/mp3;base64,${data.audioContent}`);
+      await audio.play();
+      
+      toast({
+        title: "Voice Feedback",
+        description: "Playing nutritional analysis in your language",
+      });
+    } catch (error) {
+      console.error('Speech error:', error);
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     try {
-      // Convert file to base64
       const reader = new FileReader();
       reader.onload = async (e) => {
         const imageData = e.target?.result as string;
         
-        // Call AI analysis
         const { data, error } = await supabase.functions.invoke('analyze-food', {
           body: {
             imageData,
@@ -35,15 +113,29 @@ const Index = () => {
 
         if (error) {
           console.error('Analysis error:', error);
+          toast({
+            title: "Analysis Failed",
+            description: "Could not analyze the food image",
+            variant: "destructive"
+          });
           return;
         }
 
         setAnalysisData(data);
         setCurrentStep("results");
+        
+        // Generate and speak detailed nutritional feedback
+        const nutritionSummary = generateNutritionSummary(data, selectedProfile || "general");
+        await speakResult(nutritionSummary, selectedLanguage);
       };
       reader.readAsDataURL(file);
     } catch (error) {
       console.error('File processing error:', error);
+      toast({
+        title: "Error",
+        description: "Failed to process the image",
+        variant: "destructive"
+      });
     }
   };
 

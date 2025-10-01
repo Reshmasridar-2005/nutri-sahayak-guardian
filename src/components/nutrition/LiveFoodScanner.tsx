@@ -129,13 +129,51 @@ export function LiveFoodScanner({ profileMode, language, onAnalysisResult }: Liv
       anemia: "Contains nutrients that help prevent anemia and boost energy."
     };
 
-    return `I found ${data.foodName}. It contains ${data.calories} calories and ${data.protein} grams of protein. ${
-      profileTips[profile as keyof typeof profileTips] || profileTips.children
-    } ${data.profileAdvice || ''} ${
-      data.deficiencyRisk?.length > 0 
-        ? `Please note: ${data.deficiencyRisk[0].reason}` 
-        : 'This appears to be a nutritionally balanced choice.'
-    }`;
+    let summary = `I found ${data.foodName}. `;
+    summary += `Nutritional content: ${data.calories} calories, ${data.protein} grams of protein. `;
+    
+    // Add detailed vitamin information
+    if (data.vitamins && data.vitamins.length > 0) {
+      summary += `Key vitamins include: `;
+      const topVitamins = data.vitamins.slice(0, 3);
+      topVitamins.forEach((vit: any, index: number) => {
+        summary += `${vit.name} ${vit.amount}${vit.unit}`;
+        if (index < topVitamins.length - 1) summary += ", ";
+      });
+      summary += `. `;
+    }
+    
+    // Add detailed mineral information
+    if (data.minerals && data.minerals.length > 0) {
+      summary += `Important minerals: `;
+      const topMinerals = data.minerals.slice(0, 3);
+      topMinerals.forEach((min: any, index: number) => {
+        summary += `${min.name} ${min.amount}${min.unit}`;
+        if (index < topMinerals.length - 1) summary += ", ";
+      });
+      summary += `. `;
+    }
+    
+    // Add profile-specific advice
+    summary += profileTips[profile as keyof typeof profileTips] || profileTips.children;
+    summary += ` `;
+    
+    if (data.profileAdvice) {
+      summary += data.profileAdvice + ` `;
+    }
+    
+    // Add deficiency risk assessment with details
+    if (data.deficiencyRisk?.length > 0) {
+      summary += `Health assessment: ${data.deficiencyRisk[0].nutrient} deficiency risk is ${data.deficiencyRisk[0].level}. `;
+      summary += `${data.deficiencyRisk[0].reason} `;
+      if (data.deficiencyRisk[0].recommendation) {
+        summary += `Recommendation: ${data.deficiencyRisk[0].recommendation}`;
+      }
+    } else {
+      summary += `This appears to be a nutritionally balanced choice for your profile.`;
+    }
+    
+    return summary;
   };
 
   const speakResult = async (text: string, lang: string) => {
