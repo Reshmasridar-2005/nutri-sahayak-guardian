@@ -133,66 +133,29 @@ serve(async (req) => {
 
     console.log('Analyzing food image for profile:', profileMode, 'language:', language);
 
-    const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     let nutritionData = null;
     let identifiedFoodName = null;
 
-    // Step 1: Use OpenAI Vision to identify the food accurately
-    if (openAIApiKey) {
+    // Step 1: Try Lovable AI (Gemini) first - it's free and good for food identification
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    if (lovableApiKey) {
       try {
-        console.log('Attempting OpenAI Vision API call...');
-        const visionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        console.log('Attempting Lovable AI (Gemini) for food identification...');
+        const geminiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${openAIApiKey}`,
+            'Authorization': `Bearer ${lovableApiKey}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'gpt-4o',
+            model: 'google/gemini-2.5-flash',
             messages: [
-              {
-                role: 'system',
-                content: `You are a precise nutrition expert. Analyze the food image and provide ACCURATE nutritional data per 100g serving.
-
-CRITICAL: Return exact, real-world nutritional values based on USDA/ICMR databases. Do not invent or approximate values.
-
-For each food item, provide:
-- Exact name of the food item
-- Accurate calories, protein, carbs, fat, fiber per 100g
-- Real vitamin and mineral content with proper units
-- Profile-specific advice for: ${profileMode}
-
-Return ONLY valid JSON with this structure:
-{
-  "foodName": "exact food name",
-  "confidence": 0.95,
-  "servingSize": "100g",
-  "calories": 52,
-  "protein": 0.3,
-  "carbs": 14,
-  "fat": 0.2,
-  "fiber": 2.4,
-  "vitamins": [
-    {"name": "Vitamin A", "amount": 54, "unit": "IU", "dailyValue": 1},
-    {"name": "Vitamin C", "amount": 4.6, "unit": "mg", "dailyValue": 8},
-    {"name": "Folate", "amount": 3, "unit": "mcg", "dailyValue": 1}
-  ],
-  "minerals": [
-    {"name": "Potassium", "amount": 107, "unit": "mg", "dailyValue": 2},
-    {"name": "Calcium", "amount": 6, "unit": "mg", "dailyValue": 1},
-    {"name": "Iron", "amount": 0.12, "unit": "mg", "dailyValue": 1}
-  ],
-  "deficiencyRisk": [],
-  "profileAdvice": "specific advice for the profile",
-  "culturalContext": "relevant context"
-}`
-              },
               {
                 role: 'user',
                 content: [
                   {
                     type: 'text',
-                    text: 'Identify this food and provide ACCURATE nutritional information per 100g serving. Use real database values, not estimates.'
+                    text: 'Identify this food item. Respond with ONLY the name of the food in English (e.g., "apple", "banana", "rice", "chicken curry"). Be specific but concise - single word or two words maximum.'
                   },
                   {
                     type: 'image_url',
@@ -203,65 +166,161 @@ Return ONLY valid JSON with this structure:
                 ]
               }
             ],
-            max_tokens: 2000,
+            max_tokens: 50,
             temperature: 0.1
           }),
         });
 
-        if (visionResponse.ok) {
-          const visionData = await visionResponse.json();
-          const analysisText = visionData.choices[0].message.content;
-          console.log('OpenAI raw response:', analysisText);
-
-          // Extract JSON from markdown code blocks or plain text
-          let jsonText = analysisText;
-          const codeBlockMatch = analysisText.match(/```(?:json)?\s*([\s\S]*?)```/);
-          if (codeBlockMatch) {
-            jsonText = codeBlockMatch[1];
-          } else {
-            const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              jsonText = jsonMatch[0];
-            }
-          }
-
-          try {
-            nutritionData = JSON.parse(jsonText.trim());
-            identifiedFoodName = nutritionData.foodName;
-            console.log('✓ OpenAI analysis successful for:', identifiedFoodName);
-            console.log('Nutrition data:', JSON.stringify(nutritionData, null, 2));
-          } catch (parseError) {
-            console.error('Failed to parse OpenAI JSON response:', parseError);
-            console.error('Raw text was:', jsonText);
-          }
+        if (geminiResponse.ok) {
+          const geminiData = await geminiResponse.json();
+          identifiedFoodName = geminiData.choices[0].message.content.trim().toLowerCase();
+          console.log('✓ Gemini identified food:', identifiedFoodName);
         } else {
-          const errorText = await visionResponse.text();
-          console.error('OpenAI Vision API error status:', visionResponse.status);
-          console.error('OpenAI error details:', errorText);
+          console.error('Gemini API error:', await geminiResponse.text());
         }
       } catch (error) {
-        console.error('OpenAI Vision exception:', error);
+        console.error('Gemini exception:', error);
       }
-    } else {
-      console.log('OpenAI API key not available');
     }
 
-    // Step 2: If OpenAI failed, try FatSecret with identified food name
-    if (!nutritionData && identifiedFoodName) {
-      console.log('Attempting FatSecret API with identified food:', identifiedFoodName);
+    // Step 2: Try OpenAI Vision as backup (if quota available)
+    if (!identifiedFoodName) {
+      const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
+      if (openAIApiKey) {
+        try {
+          console.log('Attempting OpenAI Vision as backup...');
+          const visionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${openAIApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'gpt-4o',
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Identify this food. Respond with ONLY the food name (e.g., "apple", "banana").'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: { url: imageData }
+                    }
+                  ]
+                }
+              ],
+              max_tokens: 50,
+              temperature: 0.1
+            }),
+          });
+
+          if (visionResponse.ok) {
+            const visionData = await visionResponse.json();
+            identifiedFoodName = visionData.choices[0].message.content.trim().toLowerCase();
+            console.log('✓ OpenAI identified food:', identifiedFoodName);
+          } else {
+            const errorText = await visionResponse.text();
+            console.log('OpenAI quota exceeded or error:', errorText);
+          }
+        } catch (error) {
+          console.error('OpenAI Vision exception:', error);
+        }
+      }
+    }
+
+    // Step 3: Get accurate nutrition from FatSecret using identified food
+    if (identifiedFoodName) {
+      console.log('Fetching nutrition data from FatSecret for:', identifiedFoodName);
       const fatSecretData = await getFatSecretNutrition(identifiedFoodName);
       if (fatSecretData) {
         nutritionData = fatSecretData;
-        console.log('✓ FatSecret data retrieved successfully');
+        console.log('✓ FatSecret nutrition data retrieved successfully');
+      } else {
+        console.log('FatSecret lookup failed, trying common variations...');
+        // Try variations (e.g., "apple" -> "apples", "red apple")
+        const variations = [
+          identifiedFoodName + 's',
+          identifiedFoodName.replace(/s$/, ''),
+          'raw ' + identifiedFoodName,
+          'fresh ' + identifiedFoodName
+        ];
+        
+        for (const variant of variations) {
+          const variantData = await getFatSecretNutrition(variant);
+          if (variantData) {
+            nutritionData = variantData;
+            console.log('✓ Found nutrition data using variant:', variant);
+            break;
+          }
+        }
       }
     }
 
-    // Step 3: If both failed, return error - don't give fake data
+    // Step 4: If we have food name but no nutrition data, use Gemini for detailed analysis
+    if (identifiedFoodName && !nutritionData && lovableApiKey) {
+      try {
+        console.log('Using Gemini for detailed nutrition analysis...');
+        const detailResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${lovableApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash',
+            messages: [
+              {
+                role: 'system',
+                content: `You are a nutrition expert. Provide ACCURATE nutritional data per 100g for the given food based on USDA/ICMR databases. Return ONLY valid JSON with this structure:
+{
+  "foodName": "food name",
+  "calories": 52,
+  "protein": 0.3,
+  "carbs": 14,
+  "fat": 0.2,
+  "fiber": 2.4,
+  "vitamins": [{"name": "Vitamin C", "amount": 4.6, "unit": "mg", "dailyValue": 8}],
+  "minerals": [{"name": "Potassium", "amount": 107, "unit": "mg", "dailyValue": 2}],
+  "deficiencyRisk": [],
+  "profileAdvice": "advice",
+  "culturalContext": "context"
+}`
+              },
+              {
+                role: 'user',
+                content: `Provide accurate nutrition data for: ${identifiedFoodName} (per 100g serving)`
+              }
+            ],
+            max_tokens: 1000,
+            temperature: 0.1
+          }),
+        });
+
+        if (detailResponse.ok) {
+          const detailData = await detailResponse.json();
+          const content = detailData.choices[0].message.content;
+          const jsonMatch = content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            nutritionData = JSON.parse(jsonMatch[0]);
+            console.log('✓ Gemini provided detailed nutrition data');
+          }
+        }
+      } catch (error) {
+        console.error('Gemini detail analysis error:', error);
+      }
+    }
+
+    // Step 5: If all failed, return helpful error
     if (!nutritionData) {
-      console.error('All nutrition APIs failed');
+      console.error('Could not retrieve nutrition data');
       return new Response(JSON.stringify({ 
         error: 'Unable to analyze food',
-        details: 'Could not retrieve accurate nutritional information. Please ensure API keys are configured correctly.'
+        details: identifiedFoodName 
+          ? `Identified "${identifiedFoodName}" but could not retrieve nutrition data. FatSecret API may be unavailable.`
+          : 'Could not identify the food in the image. Please try a clearer photo.'
       }), {
         status: 503,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
