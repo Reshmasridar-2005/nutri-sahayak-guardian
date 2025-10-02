@@ -90,11 +90,17 @@ serve(async (req) => {
       },
     );
   } catch (error) {
-    console.error('Error in text-to-speech function:', error);
+    console.error('Critical error in text-to-speech function:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error details:', errorMessage);
+    
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ 
+        error: errorMessage,
+        details: 'Text-to-speech conversion failed. Please check API configuration.'
+      }),
       {
-        status: 400,
+        status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       },
     );

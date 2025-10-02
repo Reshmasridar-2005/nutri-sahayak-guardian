@@ -135,10 +135,12 @@ serve(async (req) => {
 
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     let nutritionData = null;
+    let identifiedFoodName = null;
 
-    // Try OpenAI Vision first
+    // Step 1: Use OpenAI Vision to identify the food accurately
     if (openAIApiKey) {
       try {
+        console.log('Attempting OpenAI Vision API call...');
         const visionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -150,40 +152,39 @@ serve(async (req) => {
             messages: [
               {
                 role: 'system',
-                content: `You are a nutrition expert AI trained on ICMR (Indian Council of Medical Research) guidelines. Analyze the food image and provide detailed nutritional information.
+                content: `You are a precise nutrition expert. Analyze the food image and provide ACCURATE nutritional data per 100g serving.
 
-Profile Context: ${profileMode}
-- children: Focus on growth nutrients (protein, calcium, iron, vitamin D)
-- pregnant: Emphasize folic acid, iron, calcium, protein needs
-- elderly: Highlight easy digestion, bone health, heart health
-- weight-loss: Focus on calorie density, fiber, protein satiety
-- anemia: Prioritize iron, vitamin C (absorption), B12, folate
+CRITICAL: Return exact, real-world nutritional values based on USDA/ICMR databases. Do not invent or approximate values.
 
-Return ONLY a JSON object with this exact structure:
+For each food item, provide:
+- Exact name of the food item
+- Accurate calories, protein, carbs, fat, fiber per 100g
+- Real vitamin and mineral content with proper units
+- Profile-specific advice for: ${profileMode}
+
+Return ONLY valid JSON with this structure:
 {
-  "foodName": "Primary food identified",
+  "foodName": "exact food name",
   "confidence": 0.95,
-  "calories": 450,
-  "protein": 18.5,
-  "carbs": 65.2,
-  "fat": 12.8,
-  "fiber": 8.5,
+  "servingSize": "100g",
+  "calories": 52,
+  "protein": 0.3,
+  "carbs": 14,
+  "fat": 0.2,
+  "fiber": 2.4,
   "vitamins": [
-    {"name": "Vitamin A", "amount": 250, "unit": "mcg", "dailyValue": 28},
-    {"name": "Vitamin C", "amount": 45, "unit": "mg", "dailyValue": 50},
-    {"name": "Folate", "amount": 120, "unit": "mcg", "dailyValue": 30}
+    {"name": "Vitamin A", "amount": 54, "unit": "IU", "dailyValue": 1},
+    {"name": "Vitamin C", "amount": 4.6, "unit": "mg", "dailyValue": 8},
+    {"name": "Folate", "amount": 3, "unit": "mcg", "dailyValue": 1}
   ],
   "minerals": [
-    {"name": "Iron", "amount": 8.2, "unit": "mg", "dailyValue": 46},
-    {"name": "Calcium", "amount": 150, "unit": "mg", "dailyValue": 15},
-    {"name": "Zinc", "amount": 4.1, "unit": "mg", "dailyValue": 37}
+    {"name": "Potassium", "amount": 107, "unit": "mg", "dailyValue": 2},
+    {"name": "Calcium", "amount": 6, "unit": "mg", "dailyValue": 1},
+    {"name": "Iron", "amount": 0.12, "unit": "mg", "dailyValue": 1}
   ],
-  "deficiencyRisk": [
-    {"nutrient": "Iron", "risk": "medium", "reason": "Moderate iron content but absorption may be limited"},
-    {"nutrient": "Vitamin B12", "risk": "high", "reason": "Plant-based meal lacks B12"}
-  ],
-  "profileAdvice": "Specific advice for the selected profile mode",
-  "culturalContext": "Traditional Indian nutrition wisdom related to this food"
+  "deficiencyRisk": [],
+  "profileAdvice": "specific advice for the profile",
+  "culturalContext": "relevant context"
 }`
               },
               {
@@ -191,7 +192,7 @@ Return ONLY a JSON object with this exact structure:
                 content: [
                   {
                     type: 'text',
-                    text: 'Analyze this food image and provide comprehensive nutritional information according to ICMR standards.'
+                    text: 'Identify this food and provide ACCURATE nutritional information per 100g serving. Use real database values, not estimates.'
                   },
                   {
                     type: 'image_url',
@@ -202,94 +203,92 @@ Return ONLY a JSON object with this exact structure:
                 ]
               }
             ],
-            max_tokens: 1500,
-            temperature: 0.3
+            max_tokens: 2000,
+            temperature: 0.1
           }),
         });
 
         if (visionResponse.ok) {
           const visionData = await visionResponse.json();
           const analysisText = visionData.choices[0].message.content;
-          console.log('OpenAI analysis result:', analysisText);
+          console.log('OpenAI raw response:', analysisText);
 
-          // Extract JSON from the response
-          const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            nutritionData = JSON.parse(jsonMatch[0]);
-            console.log('OpenAI analysis successful');
+          // Extract JSON from markdown code blocks or plain text
+          let jsonText = analysisText;
+          const codeBlockMatch = analysisText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (codeBlockMatch) {
+            jsonText = codeBlockMatch[1];
+          } else {
+            const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              jsonText = jsonMatch[0];
+            }
+          }
+
+          try {
+            nutritionData = JSON.parse(jsonText.trim());
+            identifiedFoodName = nutritionData.foodName;
+            console.log('✓ OpenAI analysis successful for:', identifiedFoodName);
+            console.log('Nutrition data:', JSON.stringify(nutritionData, null, 2));
+          } catch (parseError) {
+            console.error('Failed to parse OpenAI JSON response:', parseError);
+            console.error('Raw text was:', jsonText);
           }
         } else {
           const errorText = await visionResponse.text();
-          console.error('OpenAI Vision API error:', errorText);
+          console.error('OpenAI Vision API error status:', visionResponse.status);
+          console.error('OpenAI error details:', errorText);
         }
       } catch (error) {
-        console.error('OpenAI Vision error:', error);
+        console.error('OpenAI Vision exception:', error);
+      }
+    } else {
+      console.log('OpenAI API key not available');
+    }
+
+    // Step 2: If OpenAI failed, try FatSecret with identified food name
+    if (!nutritionData && identifiedFoodName) {
+      console.log('Attempting FatSecret API with identified food:', identifiedFoodName);
+      const fatSecretData = await getFatSecretNutrition(identifiedFoodName);
+      if (fatSecretData) {
+        nutritionData = fatSecretData;
+        console.log('✓ FatSecret data retrieved successfully');
       }
     }
 
-    // If OpenAI failed, try to extract food name and use FatSecret
+    // Step 3: If both failed, return error - don't give fake data
     if (!nutritionData) {
-      console.log('Attempting FatSecret fallback...');
-      
-      // Try to get food name from a simple vision analysis or use common food names
-      const commonFoods = ['rice', 'dal', 'roti', 'curry', 'vegetables', 'fruit', 'chicken', 'fish'];
-      
-      for (const food of commonFoods) {
-        const fatSecretData = await getFatSecretNutrition(food);
-        if (fatSecretData) {
-          nutritionData = fatSecretData;
-          console.log(`Found nutrition data for ${food} via FatSecret`);
-          break;
-        }
-      }
-    }
-
-    // Ultimate fallback with enhanced nutrition data
-    if (!nutritionData) {
-      nutritionData = {
-        foodName: "Mixed Indian Food",
-        confidence: 0.75,
-        calories: 350,
-        protein: 12,
-        carbs: 55,
-        fat: 8,
-        fiber: 6,
-        vitamins: [
-          {"name": "Vitamin A", "amount": 200, "unit": "mcg", "dailyValue": 22},
-          {"name": "Vitamin C", "amount": 30, "unit": "mg", "dailyValue": 33},
-          {"name": "Folate", "amount": 80, "unit": "mcg", "dailyValue": 20}
-        ],
-        minerals: [
-          {"name": "Iron", "amount": 6, "unit": "mg", "dailyValue": 33},
-          {"name": "Calcium", "amount": 120, "unit": "mg", "dailyValue": 12},
-          {"name": "Zinc", "amount": 2.5, "unit": "mg", "dailyValue": 23}
-        ],
-        deficiencyRisk: [
-          {"nutrient": "Iron", "risk": "medium", "reason": "Moderate iron content"},
-          {"nutrient": "Vitamin B12", "risk": "high", "reason": "Limited animal products"}
-        ],
-        profileAdvice: `Suitable for ${profileMode} profile with balanced nutrition. Consider adding iron-rich foods if needed.`,
-        culturalContext: "Traditional Indian meal providing essential nutrients from multiple food groups."
-      };
+      console.error('All nutrition APIs failed');
+      return new Response(JSON.stringify({ 
+        error: 'Unable to analyze food',
+        details: 'Could not retrieve accurate nutritional information. Please ensure API keys are configured correctly.'
+      }), {
+        status: 503,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     // Enhance with profile-specific advice
-    if (profileMode === 'pregnant') {
-      nutritionData.profileAdvice += " Extra folic acid and iron recommended during pregnancy.";
-    } else if (profileMode === 'anemia') {
-      nutritionData.profileAdvice += " Pair with vitamin C sources to enhance iron absorption.";
-    } else if (profileMode === 'children') {
-      nutritionData.profileAdvice += " Excellent for growing children's nutritional needs.";
+    const profileAdviceMap: Record<string, string> = {
+      'pregnant': 'Focus on folic acid, iron, and calcium. Consult your healthcare provider.',
+      'anemia': 'Pair iron-rich foods with vitamin C sources for better absorption.',
+      'children': 'Ensure adequate protein, calcium, and vitamins for growth.',
+      'elderly': 'Focus on easily digestible, nutrient-dense foods.',
+      'weight-loss': 'Monitor portion sizes and choose low-calorie, high-fiber options.'
+    };
+
+    if (profileMode && profileAdviceMap[profileMode]) {
+      nutritionData.profileAdvice = `${nutritionData.profileAdvice || ''} ${profileAdviceMap[profileMode]}`.trim();
     }
 
-    console.log('Final nutrition data:', nutritionData);
+    console.log('✓ Final nutrition data returned:', nutritionData.foodName);
 
     return new Response(JSON.stringify(nutritionData), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
-    console.error('Error in analyze-food function:', error);
+    console.error('Critical error in analyze-food function:', error);
     return new Response(JSON.stringify({ 
       error: error instanceof Error ? error.message : 'Unknown error',
       details: 'Failed to analyze food image'
